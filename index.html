@@ -1516,7 +1516,7 @@ function migrate3(){const F=S.fin;if(!F)return;F.pay=F.pay||[];F.rules=F.rules||
   if(!F.rulesMig){if(F.autoPct>0&&F.autoPot)F.rules.push({id:uid(),cat:'alle',mode:'pct',value:F.autoPct,pot:F.autoPot});F.autoPct=0;F.rulesMig=1}}
 const payDate=(ym,day)=>{const[y,m]=ym.split('-').map(Number);return `${ym}-${pad(Math.min(day,new Date(y,m,0).getDate()))}`};
 const nextYm=ym=>{const[y,m]=ym.split('-').map(Number);const d=new Date(y,m,1);return `${d.getFullYear()}-${pad(d.getMonth()+1)}`};
-function payNext(p){const T=todayS(),ym=T.slice(0,7),d=payDate(ym,p.day);return (d<T||d<p.since||(p.last&&p.last>=ym))?payDate(nextYm(ym),p.day):d}
+function payNext(p){if(p.nextDate)return p.nextDate;if(p.manual)return null;const T=todayS(),ym=T.slice(0,7),d=payDate(ym,p.day);return (d<T||d<p.since||(p.last&&p.last>=ym))?payDate(nextYm(ym),p.day):d}
 function applyRules(t){
   const F=S.fin;let tot=0;t.parts=[];
   F.rules.filter(r=>r.cat==='alle'||r.cat===t.cat).forEach(r=>{if(!potById(r.pot))return;const left=r2(t.amount-tot);
@@ -1526,12 +1526,17 @@ function applyRules(t){
 }
 function finAutoBook(){
   const F=S.fin;if(!F?.pay?.length)return;const T=todayS(),cur=T.slice(0,7);const msgs=[];
-  F.pay.forEach(p=>{for(let k=2;k>=0;k--){const x=pd(cur+'-01');x.setMonth(x.getMonth()-k);const ym=ds(x).slice(0,7),d=payDate(ym,p.day);
-    if(d>T||d<p.since||(p.last&&p.last>=ym))continue;
-    const t={id:uid(),date:d,amount:p.amount,cat:p.cat,note:p.name+' (automatisch)',autoPay:p.id};const sv=applyRules(t);F.tx.push(t);p.last=ym;
-    msgs.push(`${p.name}: +${CHF(p.amount)}${sv?`, davon ${CHF(sv)} gespart`:''}`)}});
+  const book=(p,d)=>{const t={id:uid(),date:d,amount:p.amount,cat:p.cat,note:p.name+' (automatisch)',autoPay:p.id};const sv=applyRules(t);F.tx.push(t);p.last=d.slice(0,7);
+    msgs.push(`${p.name}: +${CHF(p.amount)}${sv?`, davon ${CHF(sv)} gespart`:''}`)};
+  F.pay.forEach(p=>{
+    if(p.nextDate&&p.nextDate<=T){book(p,p.nextDate);p.nextDate=''}
+    if(p.manual)return;
+    for(let k=2;k>=0;k--){const x=pd(cur+'-01');x.setMonth(x.getMonth()-k);const ym=ds(x).slice(0,7),d=payDate(ym,p.day);
+      if(d>T||d<p.since||(p.last&&p.last>=ym)||(p.nextDate&&p.nextDate.slice(0,7)===ym))continue;
+      book(p,d)}});
   if(msgs.length){save();setTimeout(()=>toast('💰 '+msgs.join(' · ')),400)}
 }
+function confirmMonth(p,d){toast(`Für ${MONTHS[+d.slice(5,7)-1]} ist ${p.name} schon eingetragen. Lösch zuerst den alten Eintrag.`);return false}
 function ruleText(r){const p=potById(r.pot);return `${r.cat==='alle'?'Von jeder Einnahme':'Von '+FX(r.cat)[0]}: <b class="money">${r.mode==='pct'?r.value+' %':CHF(r.value)}</b> → ${p?p.emoji+' '+esc(p.name):'<span class="g-bad">Sparziel fehlt</span>'}`}
 function autoCard(F,auto){
   const T=todayS(), ym=T.slice(0,7);
@@ -1546,7 +1551,7 @@ function autoCard(F,auto){
    <div style="display:flex;flex-direction:column;gap:16px">
     <div>${hd(['📅 Zahltage',`<button class="btn sm" data-act="payNew">+ Zahltag</button>`])}
      <div class="s" style="font-size:12.5px;color:var(--muted);margin-bottom:6px">An diesem Tag wird dein Taschengeld oder Lohn automatisch eingetragen, und deine Sparregeln laufen sofort.</div>
-     <div class="list">${F.pay.map(p=>`<div class="row"><span style="font-size:20px">${FX(p.cat)[1]}</span><div class="main"><div class="t">${esc(p.name)} · <span class="money">${CHF(p.amount)}</span></div><div class="s">jeden ${p.day}. im Monat · nächstes Mal ${fmtShort(payNext(p))}</div></div><button class="icon-btn" data-act="payDel" data-id="${p.id}" aria-label="Zahltag löschen">${I.trash}</button></div>`).join('')||'<div class="empty" style="padding:6px 2px">Noch kein Zahltag. Z. B. Taschengeld am 1. jeden Monats.</div>'}</div></div>
+     <div class="list">${F.pay.map(p=>`<div class="row"><span style="font-size:20px">${FX(p.cat)[1]}</span><div class="main"><div class="t">${esc(p.name)} · <span class="money">${CHF(p.amount)}</span></div><div class="s">${p.manual?'Datum wählst du jedes Mal selbst':`normal am ${p.day}. im Monat`} · ${payNext(p)?`nächstes Mal <b>${fmtShort(payNext(p))}</b>${p.nextDate&&!p.manual?' (verschoben)':''}`:'<span class="g-bad">nächstes Datum fehlt</span>'}</div></div><button class="btn sm ${p.manual&&!p.nextDate?'pri':''}" data-act="payDate" data-id="${p.id}">Datum ändern</button><button class="icon-btn" data-act="payDel" data-id="${p.id}" aria-label="Zahltag löschen">${I.trash}</button></div>`).join('')||'<div class="empty" style="padding:6px 2px">Noch kein Zahltag. Z. B. Taschengeld am 1. jeden Monats.</div>'}</div></div>
     <div>${hd(['🐷 Sparregeln',`<button class="btn sm" data-act="ruleNew">+ Regel</button>`])}
      <div class="s" style="font-size:12.5px;color:var(--muted);margin-bottom:6px">Bei jeder passenden Einnahme kommt dieser Betrag zuerst ins Sparziel. Danach gibst du den Rest aus.</div>
      <div class="list">${F.rules.map(r=>`<div class="row"><div class="main"><div class="t" style="font-weight:500">${ruleText(r)}</div></div><button class="icon-btn" data-act="ruleDel" data-id="${r.id}" aria-label="Regel löschen">${I.trash}</button></div>`).join('')||'<div class="empty" style="padding:6px 2px">Noch keine Regel. Z. B. von Taschengeld CHF 60 ins Sparziel.</div>'}</div></div>
@@ -1710,10 +1715,19 @@ document.addEventListener('click',e=>{
     payNew:()=>{const T=todayS();openDialog('Neuer Zahltag',`<label class="f full">Name<input name="name" required placeholder="z. B. Taschengeld"></label>
       <label class="f">Art<select name="cat">${Object.entries(FX_IN).map(([k,v])=>`<option value="${k}">${v[1]} ${v[0]}</option>`).join('')}</select></label>
       <label class="f">Betrag (CHF)<input name="amount" inputmode="decimal" required placeholder="z. B. 100"></label>
-      <label class="f">Tag im Monat<input type="number" name="day" min="1" max="31" required value="1"></label>
-      <label class="chk full"><input type="checkbox" name="now"> Für diesen Monat schon eintragen (falls der Tag schon war)</label>`,
-      d=>{const a=parseAmt(d.amount),day=Math.round(+d.day);if(!(a>0)){toast('Bitte einen Betrag eingeben');return false}if(!(day>=1&&day<=31)){toast('Tag zwischen 1 und 31');return false}
-        S.fin.pay.push({id:uid(),name:d.name.trim(),cat:d.cat,amount:a,day,since:d.now?T.slice(0,7)+'-01':T,last:''});toast('Zahltag gespeichert')});return 'nr'},
+      <label class="f full">Wann kommt das Geld?<select name="mode"><option value="fix">Meistens am gleichen Tag im Monat</option><option value="manual">Immer anders, ich wähle das Datum jedes Mal</option></select></label>
+      <label class="f">Normaler Tag im Monat<input type="number" name="day" min="1" max="31" value="1"></label>
+      <label class="f">Nächste Zahlung am<input type="date" name="next" value=""></label>
+      <p class="s full" style="margin:0;color:var(--muted);font-size:12.5px">Wenn die nächste Zahlung an einem anderen Tag kommt, trag das Datum ein. Du kannst es später mit „Datum ändern“ jederzeit anpassen. Ein Datum in der Vergangenheit wird sofort eingetragen.</p>`,
+      d=>{const a=parseAmt(d.amount),day=Math.round(+d.day||1),man=d.mode==='manual';if(!(a>0)){toast('Bitte einen Betrag eingeben');return false}if(!(day>=1&&day<=31)){toast('Tag zwischen 1 und 31');return false}
+        if(man&&!d.next){toast('Bitte das Datum der nächsten Zahlung eingeben');return false}
+        S.fin.pay.push({id:uid(),name:d.name.trim(),cat:d.cat,amount:a,day,manual:man,nextDate:d.next||'',since:T,last:''});toast('Zahltag gespeichert')});return 'nr'},
+    payDate:()=>{const p=S.fin.pay.find(x=>x.id===id);const cur=payNext(p)||'';openDialog(`Nächste Zahlung: ${esc(p.name)}`,`<label class="f full">Datum<input type="date" name="next" value="${cur}" required></label>
+      <label class="f">Betrag (CHF)<input name="amount" inputmode="decimal" value="${p.amount}"></label>
+      <p class="s full" style="margin:0;color:var(--muted);font-size:12.5px">${p.manual?'Nach dieser Zahlung fragt die App wieder nach dem nächsten Datum.':`Gilt nur für diese eine Zahlung. Danach geht es wieder am ${p.day}. im Monat weiter.`} Ein heutiges oder vergangenes Datum wird sofort eingetragen.</p>`,
+      d=>{if(!d.next){toast('Bitte ein Datum wählen');return false}const a=parseAmt(d.amount);if(a>0)p.amount=a;
+        if(!p.manual&&p.last&&p.last>=d.next.slice(0,7)&&!confirmMonth(p,d.next))return false;
+        p.nextDate=d.next;toast(`Nächste Zahlung am ${fmtShort(d.next)}`)});return 'nr'},
     payDel:()=>{S.fin.pay=S.fin.pay.filter(p=>p.id!==id)},
     ruleNew:()=>{if(!S.fin.pots.length){toast('Erstelle zuerst ein Sparziel');return 'nr'}openDialog('Neue Sparregel',`<label class="f full">Von welcher Einnahme?<select name="cat"><option value="alle">Jede Einnahme</option>${Object.entries(FX_IN).map(([k,v])=>`<option value="${k}" ${k==='tg'?'selected':''}>${v[1]} ${v[0]}</option>`).join('')}</select></label>
       <label class="f">Wie viel?<input name="value" inputmode="decimal" required placeholder="z. B. 60"></label>
