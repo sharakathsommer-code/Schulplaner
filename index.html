@@ -474,7 +474,7 @@ function migrate(){
   if(!S.w01){S.grades.concat(S.tests).forEach(x=>{if(x.ex&&x.weight>1)x.weight=1});S.w01=1}
   if(!S.ttReal){S.timetable=S.timetable.filter(l=>!l.ex).concat(realTimetable());S.ttReal=1;
     S.grades.forEach(g=>{if(g.ex&&g.subject==='Biologie')g.subject='Wirtschaft und Recht'})}
-  migrate2();
+  migrate2();migrate3();
 }
 
 function seed(){
@@ -1492,13 +1492,7 @@ function vFinanzen(){
       <label class="f">Datum<input type="date" name="date" value="${T}" max="${T}"></label>
       <label class="f">Notiz<input name="note" placeholder="z. B. Döner mit Lea"></label>
       <button class="btn pri full" type="submit">Speichern</button></form></section>
-    <section class="card"><div class="hd"><h2>Automatisch sparen</h2>${auto?`<span class="pill p-good">${CHF(auto)} bisher</span>`:''}</div>
-     ${F.pots.length?'':'<p class="s" style="margin:0 0 10px;color:var(--warn);font-size:13px">Erstelle zuerst ein Sparziel, dann kann das Geld dorthin fliessen.</p>'}
-     <div style="display:flex;flex-direction:column;gap:12px">
-      <div><label class="chk"><input type="checkbox" id="finRound" ${F.roundup.on?'checked':''}> <b>Aufrunden</b></label><div class="s" style="font-size:12.5px;color:var(--muted);margin:2px 0 6px 26px">Jede Ausgabe wird auf den nächsten Franken aufgerundet, die Differenz kommt ins Sparziel. CHF 4.30 → 70 Rp. gespart.</div><div class="inl2" style="margin-left:26px"><select id="finRoundPot">${potSel(F.roundup.pot)}</select></div></div>
-      <div><b style="font-size:14px">Zuerst sparen</b><div class="s" style="font-size:12.5px;color:var(--muted);margin:2px 0 6px">Von jeder Einnahme (z. B. Taschengeld) automatisch einen Teil sparen.</div><div class="inl2"><input type="number" id="finAuto" min="0" max="100" value="${F.autoPct||0}" style="width:64px"> % in <select id="finAutoPot">${potSel(F.autoPot)}</select></div></div>
-      <div><b style="font-size:14px">Monatsbudget</b><div class="inl2" style="margin-top:6px">CHF <input type="number" id="finBudget" min="0" step="5" value="${F.budget||''}" placeholder="z. B. 80" style="width:90px"> für Ausgaben pro Monat</div></div>
-     </div></section>
+    ${autoCard(F,auto)}
    </div>
   </div>
   <section class="card"><div class="hd"><div><h2>Laufende Abos</h2><div class="s" style="color:var(--muted);font-size:13px">${CHF(subsM)} pro Monat · ${CHF(subsM*12)} pro Jahr</div></div><button class="btn sm pri" data-act="subNew">+ Abo</button></div>
@@ -1517,6 +1511,52 @@ function vFinanzen(){
 function dlgAmount(title,label,cb){openDialog(title,`<label class="f full">${label}<input name="amount" inputmode="decimal" placeholder="z. B. 20" required></label>`,d=>{const a=parseFloat(String(d.amount).replace(',','.'));if(!(a>0)){toast('Bitte einen Betrag eingeben');return false}return cb(r2(a))})}
 const parseAmt=v=>r2(parseFloat(String(v||'').replace(',','.').replace(/[^0-9.]/g,'')));
 
+/* ---------- Finanzen: Zahltage & Sparregeln ---------- */
+function migrate3(){const F=S.fin;if(!F)return;F.pay=F.pay||[];F.rules=F.rules||[];
+  if(!F.rulesMig){if(F.autoPct>0&&F.autoPot)F.rules.push({id:uid(),cat:'alle',mode:'pct',value:F.autoPct,pot:F.autoPot});F.autoPct=0;F.rulesMig=1}}
+const payDate=(ym,day)=>{const[y,m]=ym.split('-').map(Number);return `${ym}-${pad(Math.min(day,new Date(y,m,0).getDate()))}`};
+const nextYm=ym=>{const[y,m]=ym.split('-').map(Number);const d=new Date(y,m,1);return `${d.getFullYear()}-${pad(d.getMonth()+1)}`};
+function payNext(p){const T=todayS(),ym=T.slice(0,7),d=payDate(ym,p.day);return (d<T||d<p.since||(p.last&&p.last>=ym))?payDate(nextYm(ym),p.day):d}
+function applyRules(t){
+  const F=S.fin;let tot=0;t.parts=[];
+  F.rules.filter(r=>r.cat==='alle'||r.cat===t.cat).forEach(r=>{if(!potById(r.pot))return;const left=r2(t.amount-tot);
+    let v=r.mode==='pct'?r2(t.amount*r.value/100):r.value;v=r2(Math.max(0,Math.min(v,left)));
+    if(v>0){const got=potAdd(r.pot,v,'Sparregel');if(got){t.parts.push({pot:r.pot,amt:got});tot=r2(tot+got)}}});
+  if(tot)t.auto=tot;return tot;
+}
+function finAutoBook(){
+  const F=S.fin;if(!F?.pay?.length)return;const T=todayS(),cur=T.slice(0,7);const msgs=[];
+  F.pay.forEach(p=>{for(let k=2;k>=0;k--){const x=pd(cur+'-01');x.setMonth(x.getMonth()-k);const ym=ds(x).slice(0,7),d=payDate(ym,p.day);
+    if(d>T||d<p.since||(p.last&&p.last>=ym))continue;
+    const t={id:uid(),date:d,amount:p.amount,cat:p.cat,note:p.name+' (automatisch)',autoPay:p.id};const sv=applyRules(t);F.tx.push(t);p.last=ym;
+    msgs.push(`${p.name}: +${CHF(p.amount)}${sv?`, davon ${CHF(sv)} gespart`:''}`)}});
+  if(msgs.length){save();setTimeout(()=>toast('💰 '+msgs.join(' · ')),400)}
+}
+function ruleText(r){const p=potById(r.pot);return `${r.cat==='alle'?'Von jeder Einnahme':'Von '+FX(r.cat)[0]}: <b class="money">${r.mode==='pct'?r.value+' %':CHF(r.value)}</b> → ${p?p.emoji+' '+esc(p.name):'<span class="g-bad">Sparziel fehlt</span>'}`}
+function autoCard(F,auto){
+  const T=todayS(), ym=T.slice(0,7);
+  const out=-F.tx.filter(t=>t.date.startsWith(ym)&&t.amount<0).reduce((a,t)=>a+t.amount,0);
+  const payM=F.pay.reduce((a,p)=>a+p.amount,0);
+  const saveM=F.pay.reduce((a,p)=>{let tot=0;F.rules.filter(r=>r.cat==='alle'||r.cat===p.cat).forEach(r=>{tot+=Math.max(0,Math.min(r.mode==='pct'?p.amount*r.value/100:r.value,p.amount-tot))});return a+tot},0);
+  const subsM=F.subs.reduce((a,s)=>a+subMonthly(s),0);
+  const sugg=Math.max(0,Math.floor((payM-saveM-subsM)/5)*5);
+  const hd=t=>`<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:6px"><b style="font-size:15px">${t[0]}</b>${t[1]||''}</div>`;
+  return `<section class="card"><div class="hd"><h2>Automatisch sparen</h2>${auto?`<span class="pill p-good">${CHF(auto)} bisher</span>`:''}</div>
+   ${F.pots.length?'':'<p class="s" style="margin:0 0 10px;color:var(--warn);font-size:13px">Erstelle zuerst ein Sparziel, dann kann das Geld dorthin fliessen.</p>'}
+   <div style="display:flex;flex-direction:column;gap:16px">
+    <div>${hd(['📅 Zahltage',`<button class="btn sm" data-act="payNew">+ Zahltag</button>`])}
+     <div class="s" style="font-size:12.5px;color:var(--muted);margin-bottom:6px">An diesem Tag wird dein Taschengeld oder Lohn automatisch eingetragen, und deine Sparregeln laufen sofort.</div>
+     <div class="list">${F.pay.map(p=>`<div class="row"><span style="font-size:20px">${FX(p.cat)[1]}</span><div class="main"><div class="t">${esc(p.name)} · <span class="money">${CHF(p.amount)}</span></div><div class="s">jeden ${p.day}. im Monat · nächstes Mal ${fmtShort(payNext(p))}</div></div><button class="icon-btn" data-act="payDel" data-id="${p.id}" aria-label="Zahltag löschen">${I.trash}</button></div>`).join('')||'<div class="empty" style="padding:6px 2px">Noch kein Zahltag. Z. B. Taschengeld am 1. jeden Monats.</div>'}</div></div>
+    <div>${hd(['🐷 Sparregeln',`<button class="btn sm" data-act="ruleNew">+ Regel</button>`])}
+     <div class="s" style="font-size:12.5px;color:var(--muted);margin-bottom:6px">Bei jeder passenden Einnahme kommt dieser Betrag zuerst ins Sparziel. Danach gibst du den Rest aus.</div>
+     <div class="list">${F.rules.map(r=>`<div class="row"><div class="main"><div class="t" style="font-weight:500">${ruleText(r)}</div></div><button class="icon-btn" data-act="ruleDel" data-id="${r.id}" aria-label="Regel löschen">${I.trash}</button></div>`).join('')||'<div class="empty" style="padding:6px 2px">Noch keine Regel. Z. B. von Taschengeld CHF 60 ins Sparziel.</div>'}</div></div>
+    <div>${hd(['💳 Monatsbudget'])}
+     <div class="inl2">CHF <input type="number" id="finBudget" min="0" step="5" value="${F.budget||''}" placeholder="z. B. 80" style="width:90px"> für Ausgaben pro Monat ${payM&&sugg&&sugg!==F.budget?`<button class="btn sm" data-act="budgetSugg" data-v="${sugg}">Vorschlag: ${CHF(sugg)}</button>`:''}</div>
+     ${payM?`<div class="s" style="font-size:12.5px;color:var(--muted);margin-top:6px">Pro Monat: ${CHF(payM)} rein, ${CHF(saveM)} gespart, ${CHF(subsM)} Abos, also bleiben ${CHF(payM-saveM-subsM)} zum Ausgeben.</div>`:''}
+     ${F.budget?`<div class="bar" style="margin-top:8px"><i style="width:${Math.min(100,out/F.budget*100)}%;background:${out>F.budget?'var(--bad)':out>F.budget*.8?'var(--warn)':'var(--accent)'}"></i></div><div class="s" style="font-size:12.5px;margin-top:4px;color:${out>F.budget?'var(--bad)':'var(--ink2)'}">${out>F.budget?`${CHF(out-F.budget)} über dem Budget`:`Noch ${CHF(F.budget-out)} übrig diesen Monat`}</div>`:''}</div>
+    <div><label class="chk"><input type="checkbox" id="finRound" ${F.roundup.on?'checked':''}> <b>Aufrunden</b></label><div class="s" style="font-size:12.5px;color:var(--muted);margin:2px 0 6px 26px">Jede Ausgabe wird auf den nächsten Franken aufgerundet, die Differenz kommt ins Sparziel. CHF 4.30 → 70 Rp. gespart.</div><div class="inl2" style="margin-left:26px"><select id="finRoundPot">${potSel(F.roundup.pot)}</select></div></div>
+   </div></section>`;
+}
 function dashFocus(){
   const st=pomoStats(), g=S.pomo.set.goal||4, T=todayS(), RL=S.routineLog[T]||{}, rd=S.routine.filter(s=>RL[s.id]).length, bt=bedTarget(T);
   return `<section class="card"><div class="hd"><h2>Fokus & Abend</h2><button class="btn sm pri" data-go="fokus">▶ Fokus-Timer</button></div>
@@ -1568,7 +1608,7 @@ let toastT; function toast(m){const t=document.getElementById('toast');t.textCon
 
 /* ---------- Render & Events ---------- */
 const VIEWS={fokus:vFokus,schlaf:vSchlaf,absenzen:vAbsenzen,finanzen:vFinanzen,fortschritt:vFortschritt,dashboard:vDashboard,kalender:vKalender,aufgaben:vAufgaben,tests:vTests,noten:vNoten,habits:vHabits,stundenplan:vStundenplan};
-function render(){renderNav();document.getElementById('view').innerHTML=VIEWS[route]();pomoPaint()}
+function render(){finAutoBook();renderNav();document.getElementById('view').innerHTML=VIEWS[route]();pomoPaint()}
 function go(r){route=r;navMore=false;try{history.replaceState(null,'','#'+r)}catch(e){}render();window.scrollTo(0,0)}
 
 document.addEventListener('click',e=>{
@@ -1648,7 +1688,7 @@ document.addEventListener('click',e=>{
     potIn:()=>{const p=potById(id);dlgAmount(`${p.emoji} ${esc(p.name)}: einzahlen`,'Betrag (CHF)',a=>{potAdd(id,a,'Einzahlung');toast(p.saved>=p.target?'🎉 Sparziel erreicht!':`${CHF(a)} gespart`)});return 'nr'},
     potOut:()=>{const p=potById(id);dlgAmount(`${p.emoji} ${esc(p.name)}: abheben`,'Betrag (CHF)',a=>{potAdd(id,-a,'Abhebung');toast('Abgehoben')});return 'nr'},
     potDel:()=>{S.fin.pots=S.fin.pots.filter(p=>p.id!==id)},
-    txDel:()=>{const t=S.fin.tx.find(x=>x.id===id);if(t?.round&&t.roundPot)potAdd(t.roundPot,-t.round,'Storno');if(t?.auto&&t.autoPot)potAdd(t.autoPot,-t.auto,'Storno');S.fin.tx=S.fin.tx.filter(x=>x.id!==id)},
+    txDel:()=>{const t=S.fin.tx.find(x=>x.id===id);if(t?.round&&t.roundPot)potAdd(t.roundPot,-t.round,'Storno');if(t?.parts)t.parts.forEach(x=>potAdd(x.pot,-x.amt,'Storno'));else if(t?.auto&&t.autoPot)potAdd(t.autoPot,-t.auto,'Storno');S.fin.tx=S.fin.tx.filter(x=>x.id!==id)},
     fmPrev:()=>{const[y,m]=finMonth.split('-').map(Number);const d=new Date(y,m-2,1);finMonth=`${d.getFullYear()}-${pad(d.getMonth()+1)}`},
     fmNext:()=>{const[y,m]=finMonth.split('-').map(Number);const d=new Date(y,m,1);const n=`${d.getFullYear()}-${pad(d.getMonth()+1)}`;if(n<=todayS().slice(0,7))finMonth=n},
     subNew:()=>{openDialog('Neues Abo',`<label class="f full">Name<input name="name" required placeholder="z. B. Spotify"></label><label class="f">Preis (CHF)<input name="price" inputmode="decimal" required placeholder="z. B. 12.95"></label>
@@ -1667,6 +1707,21 @@ document.addEventListener('click',e=>{
     wishDo:()=>{const x=S.fin.ch.wish.items.find(i=>i.id===id);x.status=b.dataset.s;toast(x.status==='nein'?`${CHF(x.price)} nicht ausgegeben 🎉`:'Viel Freude damit!')},
     bkExport:()=>{const txt=JSON.stringify(S);openDialog('Backup kopieren',`<label class="f full">Dein Backup<textarea id="bkTxt" readonly style="min-height:160px;font-family:var(--f-mono);font-size:11px">${esc(txt)}</textarea></label><p class="s full" style="margin:0;color:var(--muted);font-size:13px">Tipp auf „Kopieren“ und füg den Text in der App unter „Backup einfügen“ ein.</p>`,()=>{const ta=document.getElementById('bkTxt');try{navigator.clipboard.writeText(txt).then(()=>toast('Backup kopiert'),()=>{ta.select();document.execCommand('copy');toast('Backup kopiert')})}catch(e){ta.select();try{document.execCommand('copy')}catch(_){}toast('Backup kopiert')}},'Kopieren');return 'nr'},
     bkImport:()=>{openDialog('Backup einfügen',`<label class="f full">Backup-Text<textarea name="txt" required style="min-height:160px;font-family:var(--f-mono);font-size:11px" placeholder="Hier einfügen"></textarea></label><p class="s full" style="margin:0;color:var(--bad);font-size:13px">Achtung: Die Daten auf diesem Gerät werden durch das Backup ersetzt.</p>`,d=>{let x;try{x=JSON.parse(d.txt)}catch(e){toast('Das ist kein gültiges Backup');return false}if(!x||x.v!==1||!Array.isArray(x.tasks)){toast('Das ist kein gültiges Backup');return false}S=x;migrate();toast('Backup geladen')},'Laden');return 'nr'},
+    payNew:()=>{const T=todayS();openDialog('Neuer Zahltag',`<label class="f full">Name<input name="name" required placeholder="z. B. Taschengeld"></label>
+      <label class="f">Art<select name="cat">${Object.entries(FX_IN).map(([k,v])=>`<option value="${k}">${v[1]} ${v[0]}</option>`).join('')}</select></label>
+      <label class="f">Betrag (CHF)<input name="amount" inputmode="decimal" required placeholder="z. B. 100"></label>
+      <label class="f">Tag im Monat<input type="number" name="day" min="1" max="31" required value="1"></label>
+      <label class="chk full"><input type="checkbox" name="now"> Für diesen Monat schon eintragen (falls der Tag schon war)</label>`,
+      d=>{const a=parseAmt(d.amount),day=Math.round(+d.day);if(!(a>0)){toast('Bitte einen Betrag eingeben');return false}if(!(day>=1&&day<=31)){toast('Tag zwischen 1 und 31');return false}
+        S.fin.pay.push({id:uid(),name:d.name.trim(),cat:d.cat,amount:a,day,since:d.now?T.slice(0,7)+'-01':T,last:''});toast('Zahltag gespeichert')});return 'nr'},
+    payDel:()=>{S.fin.pay=S.fin.pay.filter(p=>p.id!==id)},
+    ruleNew:()=>{if(!S.fin.pots.length){toast('Erstelle zuerst ein Sparziel');return 'nr'}openDialog('Neue Sparregel',`<label class="f full">Von welcher Einnahme?<select name="cat"><option value="alle">Jede Einnahme</option>${Object.entries(FX_IN).map(([k,v])=>`<option value="${k}" ${k==='tg'?'selected':''}>${v[1]} ${v[0]}</option>`).join('')}</select></label>
+      <label class="f">Wie viel?<input name="value" inputmode="decimal" required placeholder="z. B. 60"></label>
+      <label class="f">Einheit<select name="mode"><option value="fix">CHF</option><option value="pct">Prozent</option></select></label>
+      <label class="f full">In welches Sparziel?<select name="pot">${potSel(S.fin.pots[0]?.id).replace(/<option value="">[^<]*<\/option>/,'')}</select></label>`,
+      d=>{const v=parseAmt(d.value);if(!(v>0)||(d.mode==='pct'&&v>100)){toast('Bitte einen gültigen Betrag eingeben');return false}S.fin.rules.push({id:uid(),cat:d.cat,mode:d.mode,value:v,pot:d.pot});toast('Sparregel gespeichert')});return 'nr'},
+    ruleDel:()=>{S.fin.rules=S.fin.rules.filter(r=>r.id!==id)},
+    budgetSugg:()=>{S.fin.budget=+b.dataset.v;toast(`Budget: ${CHF(S.fin.budget)} pro Monat`)},
     clearEx:()=>{['timetable','grades','tasks','tests','studyLog','journal','goals'].forEach(k=>S[k]=S[k].filter(x=>!x.ex));S.exHabit={};for(const k in S.studyDone)if(S.studyDone[k]==='ex')delete S.studyDone[k];S.hasExamples=false;toast('Beispiele gelöscht')},
   };
   if(A[a]){ if(['setRed','setSleepGoal'].includes(a)) return; e.preventDefault(); if(A[a]()==='nr') return;
@@ -1686,8 +1741,6 @@ document.addEventListener('change',e=>{
   if(el.closest('#dlgForm')&&el.name==='date'){const box=document.getElementById('absLessons');if(box)box.innerHTML=absLessonsHtml(el.value);return}
   if(el.id==='finRound'){S.fin.roundup.on=el.checked;if(el.checked&&!S.fin.roundup.pot&&S.fin.pots[0])S.fin.roundup.pot=S.fin.pots[0].id;save();render();return}
   if(el.id==='finRoundPot'){S.fin.roundup.pot=el.value;save();return}
-  if(el.id==='finAuto'){S.fin.autoPct=Math.max(0,Math.min(100,+el.value||0));if(S.fin.autoPct&&!S.fin.autoPot&&S.fin.pots[0])S.fin.autoPot=S.fin.pots[0].id;save();render();return}
-  if(el.id==='finAutoPot'){S.fin.autoPot=el.value;save();return}
   if(el.id==='finBudget'){S.fin.budget=Math.max(0,+el.value||0);save();render();return}
   if(el.dataset.chpot){S.fin.ch[el.dataset.chpot].pot=el.value;save();return}
   if(el.id==='w52f'){S.fin.ch.w52.factor=+el.value;save();render();return}
@@ -1708,7 +1761,7 @@ document.addEventListener('submit',e=>{
   if(f.id==='finForm'){const a=parseAmt(d.amount);if(!(a>0)){toast('Bitte einen Betrag eingeben');return}
     const isIn=!!FX_IN[d.cat], t={id:uid(),date:d.date||todayS(),amount:isIn?a:-a,cat:d.cat,note:(d.note||'').trim()}, F=S.fin; let msg=isIn?`+${CHF(a)} eingetragen`:`${CHF(a)} Ausgabe eingetragen`;
     if(!isIn&&F.roundup.on&&potById(F.roundup.pot)){const diff=r2(Math.ceil(a-1e-9)-a);if(diff>0){t.round=potAdd(F.roundup.pot,diff,'Aufrunden');t.roundPot=F.roundup.pot;msg+=` · ${CHF(diff)} aufgerundet`}}
-    if(isIn&&F.autoPct>0&&potById(F.autoPot)){const sv=r2(a*F.autoPct/100);if(sv>0){t.auto=potAdd(F.autoPot,sv,'Zuerst sparen');t.autoPot=F.autoPot;msg+=` · ${CHF(sv)} gespart`}}
+    if(isIn){const sv=applyRules(t);if(sv)msg+=` · ${CHF(sv)} gespart`}
     F.tx.push(t);finMonth=t.date.slice(0,7);toast(msg);save();render();return}
   if(f.id==='logForm'){const m=+d.min;if(!(m>0)){toast('Bitte Minuten eingeben');return}S.studyLog.push({id:uid(),date:d.date||todayS(),subject:d.subject,what:d.what.trim(),min:m});toast(`${m} min gespeichert`)}
   else {if(!d.text.trim())return;S.journal.push({id:uid(),date:todayS(),type:jType,subject:d.subject,text:d.text.trim()});toast('Im Journal festgehalten')}
