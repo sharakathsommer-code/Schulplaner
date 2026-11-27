@@ -1426,7 +1426,7 @@ const FX=c=>FX_OUT[c]||FX_IN[c]||['Sonstiges','📦'];
 const POT_EM=['🎯','🎧','👟','✈️','📱','🎮','🎁','🚲','💻','🏖️','🥁','🏐','🚗','🎓'];
 const POT_COL=['#14996A','#6D4AFF','#E8573A','#E39B0B','#3BA6C9','#C76BA8'];
 function potById(id){return S.fin.pots.find(p=>p.id===id)}
-function potAdd(id,amt,why){const p=potById(id);if(!p||!amt)return 0;const before=p.saved;p.saved=r2(Math.max(0,p.saved+amt));(p.hist=p.hist||[]).push({date:todayS(),amt:r2(p.saved-before),why});return r2(p.saved-before)}
+function potAdd(id,amt,why,date){const p=potById(id);if(!p||!amt)return 0;const before=p.saved;p.saved=r2(Math.max(0,p.saved+amt));(p.hist=p.hist||[]).push({date:date||todayS(),amt:r2(p.saved-before),why});return r2(p.saved-before)}
 const subMonthly=s=>s.interval==='jahr'?s.price/12:s.interval==='woche'?s.price*52/12:s.price;
 function subNext(s){let d=s.next||todayS();const T=todayS();let g=0;while(d<T&&g++<600){const x=pd(d);if(s.interval==='jahr')x.setFullYear(x.getFullYear()+1);else if(s.interval==='woche')x.setDate(x.getDate()+7);else x.setMonth(x.getMonth()+1);d=ds(x)}return d}
 const potSel=(sel,empty='– kein Sparziel –')=>`<option value="">${empty}</option>${S.fin.pots.map(p=>`<option value="${p.id}" ${p.id===sel?'selected':''}>${p.emoji} ${esc(p.name)}</option>`).join('')}`;
@@ -1521,11 +1521,18 @@ function applyRules(t){
   const F=S.fin;let tot=0;t.parts=[];
   F.rules.filter(r=>r.cat==='alle'||r.cat===t.cat).forEach(r=>{if(!potById(r.pot))return;const left=r2(t.amount-tot);
     let v=r.mode==='pct'?r2(t.amount*r.value/100):r.value;v=r2(Math.max(0,Math.min(v,left)));
-    if(v>0){const got=potAdd(r.pot,v,'Sparregel');if(got){t.parts.push({pot:r.pot,amt:got});tot=r2(tot+got)}}});
+    if(v<=0)return;
+    if(r.day){F.pending=F.pending||[];F.pending.push({id:uid(),date:dayOnOrAfter(t.date,r.day),amt:v,pot:r.pot,tx:t.id,rule:r.id});tot=r2(tot+v);t.pend=r2((t.pend||0)+v);return}
+    const got=potAdd(r.pot,v,'Sparregel');if(got){t.parts.push({pot:r.pot,amt:got});tot=r2(tot+got)}});
   if(tot)t.auto=tot;return tot;
 }
+function dayOnOrAfter(d,day){const ym=d.slice(0,7),x=payDate(ym,day);return x>=d?x:payDate(nextYm(ym),day)}
+function runPending(){const F=S.fin,T=todayS();if(!F.pending?.length)return [];const msgs=[];
+  F.pending.filter(x=>x.date<=T).forEach(x=>{const got=potAdd(x.pot,x.amt,'Sparregel',x.date);const t=F.tx.find(y=>y.id===x.tx);if(t&&got){(t.parts=t.parts||[]).push({pot:x.pot,amt:got});t.pend=r2(Math.max(0,(t.pend||0)-x.amt))}
+    const p=potById(x.pot);if(got)msgs.push(`${CHF(got)} ins Sparziel ${p?p.emoji+' '+p.name:''}`)});
+  F.pending=F.pending.filter(x=>x.date>T);return msgs}
 function finAutoBook(){
-  const F=S.fin;if(!F?.pay?.length)return;const T=todayS(),cur=T.slice(0,7);const msgs=[];
+  const F=S.fin;if(!F?.pay?.length&&!F?.pending?.length)return;const T=todayS(),cur=T.slice(0,7);const msgs=[];
   const book=(p,d)=>{const t={id:uid(),date:d,amount:p.amount,cat:p.cat,note:p.name+' (automatisch)',autoPay:p.id};const sv=applyRules(t);F.tx.push(t);p.last=d.slice(0,7);
     msgs.push(`${p.name}: +${CHF(p.amount)}${sv?`, davon ${CHF(sv)} gespart`:''}`)};
   F.pay.forEach(p=>{
@@ -1534,10 +1541,11 @@ function finAutoBook(){
     for(let k=2;k>=0;k--){const x=pd(cur+'-01');x.setMonth(x.getMonth()-k);const ym=ds(x).slice(0,7),d=payDate(ym,p.day);
       if(d>T||d<p.since||(p.last&&p.last>=ym)||(p.nextDate&&p.nextDate.slice(0,7)===ym))continue;
       book(p,d)}});
+  msgs.push(...runPending());
   if(msgs.length){save();setTimeout(()=>toast('💰 '+msgs.join(' · ')),400)}
 }
 function confirmMonth(p,d){toast(`Für ${MONTHS[+d.slice(5,7)-1]} ist ${p.name} schon eingetragen. Lösch zuerst den alten Eintrag.`);return false}
-function ruleText(r){const p=potById(r.pot);return `${r.cat==='alle'?'Von jeder Einnahme':'Von '+FX(r.cat)[0]}: <b class="money">${r.mode==='pct'?r.value+' %':CHF(r.value)}</b> → ${p?p.emoji+' '+esc(p.name):'<span class="g-bad">Sparziel fehlt</span>'}`}
+function ruleText(r){const p=potById(r.pot);return `${r.cat==='alle'?'Von jeder Einnahme':'Von '+FX(r.cat)[0]}: <b class="money">${r.mode==='pct'?r.value+' %':CHF(r.value)}</b> → ${p?p.emoji+' '+esc(p.name):'<span class="g-bad">Sparziel fehlt</span>'}<span class="s" style="color:var(--muted)"> · ${r.day?'am '+r.day+'. im Monat':'sofort am Zahltag'}</span>`}
 function autoCard(F,auto){
   const T=todayS(), ym=T.slice(0,7);
   const out=-F.tx.filter(t=>t.date.startsWith(ym)&&t.amount<0).reduce((a,t)=>a+t.amount,0);
@@ -1554,7 +1562,8 @@ function autoCard(F,auto){
      <div class="list">${F.pay.map(p=>`<div class="row"><span style="font-size:20px">${FX(p.cat)[1]}</span><div class="main"><div class="t">${esc(p.name)} · <span class="money">${CHF(p.amount)}</span></div><div class="s">${p.manual?'Datum wählst du jedes Mal selbst':`normal am ${p.day}. im Monat`} · ${payNext(p)?`nächstes Mal <b>${fmtShort(payNext(p))}</b>${p.nextDate&&!p.manual?' (verschoben)':''}`:'<span class="g-bad">nächstes Datum fehlt</span>'}</div></div><button class="btn sm ${p.manual&&!p.nextDate?'pri':''}" data-act="payDate" data-id="${p.id}">Datum ändern</button><button class="icon-btn" data-act="payDel" data-id="${p.id}" aria-label="Zahltag löschen">${I.trash}</button></div>`).join('')||'<div class="empty" style="padding:6px 2px">Noch kein Zahltag. Z. B. Taschengeld am 1. jeden Monats.</div>'}</div></div>
     <div>${hd(['🐷 Sparregeln',`<button class="btn sm" data-act="ruleNew">+ Regel</button>`])}
      <div class="s" style="font-size:12.5px;color:var(--muted);margin-bottom:6px">Bei jeder passenden Einnahme kommt dieser Betrag zuerst ins Sparziel. Danach gibst du den Rest aus.</div>
-     <div class="list">${F.rules.map(r=>`<div class="row"><div class="main"><div class="t" style="font-weight:500">${ruleText(r)}</div></div><button class="icon-btn" data-act="ruleDel" data-id="${r.id}" aria-label="Regel löschen">${I.trash}</button></div>`).join('')||'<div class="empty" style="padding:6px 2px">Noch keine Regel. Z. B. von Taschengeld CHF 60 ins Sparziel.</div>'}</div></div>
+     <div class="list">${F.rules.map(r=>`<div class="row"><div class="main"><div class="t" style="font-weight:500">${ruleText(r)}</div></div><button class="icon-btn" data-act="ruleDel" data-id="${r.id}" aria-label="Regel löschen">${I.trash}</button></div>`).join('')||'<div class="empty" style="padding:6px 2px">Noch keine Regel. Z. B. von Taschengeld CHF 60 ins Sparziel.</div>'}</div>
+     ${(F.pending||[]).length?`<div class="need" style="margin-top:8px"><b>Geplant</b>${F.pending.slice().sort((a,b)=>a.date<b.date?-1:1).map(x=>{const p=potById(x.pot);return `<div class="inl2" style="justify-content:space-between"><span><b class="money">${CHF(x.amt)}</b> → ${p?p.emoji+' '+esc(p.name):'?'} am <b>${fmtShort(x.date)}</b></span><span style="display:flex;gap:4px"><button class="btn sm" data-act="pendDate" data-id="${x.id}">Datum ändern</button><button class="icon-btn" data-act="pendDel" data-id="${x.id}" aria-label="Geplanten Betrag löschen">${I.trash}</button></span></div>`}).join('')}</div>`:''}</div>
     <div>${hd(['💳 Monatsbudget'])}
      <div class="inl2">CHF <input type="number" id="finBudget" min="0" step="5" value="${F.budget||''}" placeholder="z. B. 80" style="width:90px"> für Ausgaben pro Monat ${payM&&sugg&&sugg!==F.budget?`<button class="btn sm" data-act="budgetSugg" data-v="${sugg}">Vorschlag: ${CHF(sugg)}</button>`:''}</div>
      ${payM?`<div class="s" style="font-size:12.5px;color:var(--muted);margin-top:6px">Pro Monat: ${CHF(payM)} rein, ${CHF(saveM)} gespart, ${CHF(subsM)} Abos, also bleiben ${CHF(payM-saveM-subsM)} zum Ausgeben.</div>`:''}
@@ -1690,10 +1699,17 @@ document.addEventListener('click',e=>{
       <label class="f">Zielbetrag (CHF)<input name="target" inputmode="decimal" required placeholder="z. B. 250"></label><label class="f">Bis wann? (optional)<input type="date" name="deadline"></label>
       <label class="f">Symbol<select name="emoji">${POT_EM.map(x=>`<option>${x}</option>`).join('')}</select></label><label class="f">Schon gespart (CHF)<input name="saved" inputmode="decimal" placeholder="0"></label>`,
       d=>{const t=parseAmt(d.target);if(!(t>0)){toast('Bitte einen Zielbetrag eingeben');return false}S.fin.pots.push({id:uid(),name:d.name.trim(),target:t,saved:parseAmt(d.saved)||0,deadline:d.deadline||'',emoji:d.emoji,color:POT_COL[S.fin.pots.length%POT_COL.length],hist:[]});toast('Sparziel erstellt')});return 'nr'},
-    potIn:()=>{const p=potById(id);dlgAmount(`${p.emoji} ${esc(p.name)}: einzahlen`,'Betrag (CHF)',a=>{potAdd(id,a,'Einzahlung');toast(p.saved>=p.target?'🎉 Sparziel erreicht!':`${CHF(a)} gespart`)});return 'nr'},
+    potIn:()=>{const p=potById(id),T=todayS();openDialog(`${p.emoji} ${esc(p.name)}: einzahlen`,`<label class="f">Betrag (CHF)<input name="amount" inputmode="decimal" placeholder="z. B. 20" required></label><label class="f">Datum<input type="date" name="date" value="${T}"></label>
+      <p class="s full" style="margin:0;color:var(--muted);font-size:12.5px">Ein Datum in der Zukunft wird als geplante Einzahlung gespeichert und an diesem Tag automatisch gebucht.</p>`,
+      d=>{const a=parseAmt(d.amount);if(!(a>0)){toast('Bitte einen Betrag eingeben');return false}const dt=d.date||T;
+        if(dt>T){(S.fin.pending=S.fin.pending||[]).push({id:uid(),date:dt,amt:a,pot:id});toast(`${CHF(a)} geplant für ${fmtShort(dt)}`);return}
+        potAdd(id,a,'Einzahlung',dt);toast(p.saved>=p.target?'🎉 Sparziel erreicht!':`${CHF(a)} gespart`)});return 'nr'},
+    pendDate:()=>{const x=S.fin.pending.find(y=>y.id===id);openDialog('Wann soll gespart werden?',`<label class="f full">Datum<input type="date" name="date" value="${x.date}" required></label><label class="f">Betrag (CHF)<input name="amount" inputmode="decimal" value="${x.amt}"></label>`,
+      d=>{if(!d.date)return false;const a=parseAmt(d.amount);if(a>0){const t=S.fin.tx.find(y=>y.id===x.tx);if(t){t.pend=r2((t.pend||0)-x.amt+a);t.auto=r2((t.auto||0)-x.amt+a)}x.amt=a}x.date=d.date;toast(`Geplant für ${fmtShort(d.date)}`)});return 'nr'},
+    pendDel:()=>{const x=S.fin.pending.find(y=>y.id===id);const t=x&&S.fin.tx.find(y=>y.id===x.tx);if(t){t.pend=r2(Math.max(0,(t.pend||0)-x.amt));t.auto=r2(Math.max(0,(t.auto||0)-x.amt))}S.fin.pending=S.fin.pending.filter(y=>y.id!==id)},
     potOut:()=>{const p=potById(id);dlgAmount(`${p.emoji} ${esc(p.name)}: abheben`,'Betrag (CHF)',a=>{potAdd(id,-a,'Abhebung');toast('Abgehoben')});return 'nr'},
     potDel:()=>{S.fin.pots=S.fin.pots.filter(p=>p.id!==id)},
-    txDel:()=>{const t=S.fin.tx.find(x=>x.id===id);if(t?.round&&t.roundPot)potAdd(t.roundPot,-t.round,'Storno');if(t?.parts)t.parts.forEach(x=>potAdd(x.pot,-x.amt,'Storno'));else if(t?.auto&&t.autoPot)potAdd(t.autoPot,-t.auto,'Storno');S.fin.tx=S.fin.tx.filter(x=>x.id!==id)},
+    txDel:()=>{const t=S.fin.tx.find(x=>x.id===id);if(t?.round&&t.roundPot)potAdd(t.roundPot,-t.round,'Storno');if(t?.parts)t.parts.forEach(x=>potAdd(x.pot,-x.amt,'Storno'));else if(t?.auto&&t.autoPot)potAdd(t.autoPot,-t.auto,'Storno');if(S.fin.pending)S.fin.pending=S.fin.pending.filter(x=>x.tx!==id);S.fin.tx=S.fin.tx.filter(x=>x.id!==id)},
     fmPrev:()=>{const[y,m]=finMonth.split('-').map(Number);const d=new Date(y,m-2,1);finMonth=`${d.getFullYear()}-${pad(d.getMonth()+1)}`},
     fmNext:()=>{const[y,m]=finMonth.split('-').map(Number);const d=new Date(y,m,1);const n=`${d.getFullYear()}-${pad(d.getMonth()+1)}`;if(n<=todayS().slice(0,7))finMonth=n},
     subNew:()=>{openDialog('Neues Abo',`<label class="f full">Name<input name="name" required placeholder="z. B. Spotify"></label><label class="f">Preis (CHF)<input name="price" inputmode="decimal" required placeholder="z. B. 12.95"></label>
@@ -1732,8 +1748,12 @@ document.addEventListener('click',e=>{
     ruleNew:()=>{if(!S.fin.pots.length){toast('Erstelle zuerst ein Sparziel');return 'nr'}openDialog('Neue Sparregel',`<label class="f full">Von welcher Einnahme?<select name="cat"><option value="alle">Jede Einnahme</option>${Object.entries(FX_IN).map(([k,v])=>`<option value="${k}" ${k==='tg'?'selected':''}>${v[1]} ${v[0]}</option>`).join('')}</select></label>
       <label class="f">Wie viel?<input name="value" inputmode="decimal" required placeholder="z. B. 60"></label>
       <label class="f">Einheit<select name="mode"><option value="fix">CHF</option><option value="pct">Prozent</option></select></label>
-      <label class="f full">In welches Sparziel?<select name="pot">${potSel(S.fin.pots[0]?.id).replace(/<option value="">[^<]*<\/option>/,'')}</select></label>`,
-      d=>{const v=parseAmt(d.value);if(!(v>0)||(d.mode==='pct'&&v>100)){toast('Bitte einen gültigen Betrag eingeben');return false}S.fin.rules.push({id:uid(),cat:d.cat,mode:d.mode,value:v,pot:d.pot});toast('Sparregel gespeichert')});return 'nr'},
+      <label class="f full">In welches Sparziel?<select name="pot">${potSel(S.fin.pots[0]?.id).replace(/<option value="">[^<]*<\/option>/,'')}</select></label>
+      <label class="f">Wann sparen?<select name="when"><option value="0">Sofort am Zahltag</option><option value="1">An einem bestimmten Tag im Monat</option></select></label>
+      <label class="f">Tag im Monat (falls bestimmter Tag)<input type="number" name="day" min="1" max="31" placeholder="z. B. 5"></label>`,
+      d=>{const v=parseAmt(d.value);if(!(v>0)||(d.mode==='pct'&&v>100)){toast('Bitte einen gültigen Betrag eingeben');return false}
+        const day=d.when==='1'?Math.round(+d.day):0;if(d.when==='1'&&!(day>=1&&day<=31)){toast('Bitte einen Tag zwischen 1 und 31 eingeben');return false}
+        S.fin.rules.push({id:uid(),cat:d.cat,mode:d.mode,value:v,pot:d.pot,day});toast('Sparregel gespeichert')});return 'nr'},
     ruleDel:()=>{S.fin.rules=S.fin.rules.filter(r=>r.id!==id)},
     budgetSugg:()=>{S.fin.budget=+b.dataset.v;toast(`Budget: ${CHF(S.fin.budget)} pro Monat`)},
     clearEx:()=>{['timetable','grades','tasks','tests','studyLog','journal','goals'].forEach(k=>S[k]=S[k].filter(x=>!x.ex));S.exHabit={};for(const k in S.studyDone)if(S.studyDone[k]==='ex')delete S.studyDone[k];S.hasExamples=false;toast('Beispiele gelöscht')},
